@@ -1,10 +1,10 @@
 CC     = gcc
-CFLAGS = -g -std=c99 -Wall -Wvla -Werror -fsanitize=address,undefined
+FLAGS = -g -std=c99 -Wall -Wvla -Werror -fsanitize=address,undefined
 
-all: myShell
+all: mysh
 
-myShell: myShell.c
-		$(CC) $(CFLAGS) -o $@ $^
+mysh: mysh.c
+		$(CC) $(FLAGS) -o $@ $^
 
 clean:
-	rm -f *.o myShell
+	rm -f *.o mysh
