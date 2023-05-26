@@ -1,269 +1,213 @@
+#define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
-#include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/types.h>
-#include <sys/wait.h>
-#include <sys/stat.h>
+#include <unistd.h>
+#include <signal.h>
 #include <fcntl.h>
-#include <dirent.h>
+#include <limits.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <glob.h>
 
-#define MYEXIT 60
-#define WILD_CARD 69
-#define BUF_SIZE 1024
+#define true 1
+#define false 0
 
-typedef struct token
+/*
+TO-DO:
+Refactor to get rid of dirty gotos
+Test path names (broken I believe, doesn't allow me to run ./mysh)
+Finish wildcards (expansion and directory works, but need to implement for commands as well such as ec*o)
+Implement pipes
+Implement all extensions - wildcard directories done
+Verify batch mode still works(should be the same but use fd instead of STDIN)
+*/
+
+typedef struct Command
 {
-    char ch[BUF_SIZE];
-} tok;
+    char *path;  // path to executable
+    char **args; // list of arguments
+    int arg_length;
+    int fd_in;  // input file
+    int fd_out; // output file
+} Command;
 
-typedef struct command
+volatile int active = 1;
+
+void handle()
 {
-    int infd;  // file descriptor of input stream
-    int outfd; // file descriptor of output stream
-    int tokens;
-    int arrSize;
-    tok *token;
-} cmd;
+    active = 0;
+}
 
-int runCmd(cmd*);
-
-void addToken(cmd *c, char *inpToken)
+/*
+Creates handler for interrupt command to properly exit the shell.
+*/
+void install_handlers()
 {
-    if (c->tokens == c->arrSize)
+    struct sigaction act;
+    act.sa_handler = handle;
+    act.sa_flags = 0;
+    sigemptyset(&act.sa_mask);
+    sigaction(SIGINT, &act, NULL);
+}
+
+/*
+Creates a new command with default input & output file descriptors.
+*/
+Command *newCommand()
+{
+    Command *new_command = malloc(sizeof(Command));
+    new_command->path = calloc(1, BUFSIZ * sizeof(char));
+    new_command->args = NULL;
+    new_command->arg_length = 0;
+    new_command->fd_in = STDIN_FILENO;
+    new_command->fd_out = STDOUT_FILENO;
+    return new_command;
+}
+
+/*
+Frees a given command.
+*/
+void freeCommand(Command *cmd)
+{
+    if (cmd->args != NULL)
     {
-        tok *newArr = calloc(2 * c->arrSize, sizeof(tok));
-        for (int iTok = 0; iTok < c->tokens; iTok++)
+        for (int i = 0; i < cmd->arg_length; i++)
         {
-            for (int iCha = 0; iCha < BUF_SIZE; iCha++)
-            {
-                newArr[iTok].ch[iCha] = c->token[iTok].ch[iCha];
-            }
+            free(cmd->args[i]); // free individual tokens
         }
-        free(c->token);
-        c->token = newArr;
+        free(cmd->args);
     }
-    strcpy(c->token[c->tokens++].ch, inpToken);
+    free(cmd->path);
+    free(cmd);
 }
 
-void prtCmd(cmd *);
+/*
+Dynamic arraylist of arguments for a command.
+*/
+char **add_to_args(char **args, int *length, char *token)
+{
+    // Increase the length of the array
+    (*length)++;
 
-cmd *newCmd()
-{
-    cmd *new = malloc(sizeof(cmd));
-    new->token = calloc(10, sizeof(tok));
-    new->tokens = 0;
-    new->arrSize = 10;
-    new->infd = STDIN_FILENO;
-    new->outfd = STDOUT_FILENO;
-    return new;
-}
-void freeCmd(cmd *freeCmd)
-{
-    free(freeCmd->token);
-    free(freeCmd);
-}
-// returns 0 on success
-int bareName(cmd *command) // char *token, tok *cmd
-{
-    char **args = malloc(8 * ((command->tokens) + 1));
-    for (int i = 0; i < command->tokens; i++)
+    // Reallocate the memory for the array
+    args = realloc(args, (*length) * sizeof(char *));
+
+    // Check if the reallocation was successful
+    if (args == NULL)
     {
-        args[i] = (char *)&command->token[i];
-    }
-    args[command->tokens] = NULL;
-
-    if (execvp(command->token->ch, args) == 0)
-    {
-        free(args);
-        exit(EXIT_SUCCESS);
-    }
-    if (command->token[0].ch[0] == '~'){
-        chdir(getenv("HOME"));
-        if(command->token[0].ch[2] != 0)
-            if (chdir (&(command->token[0].ch[2])) == -1){
-                perror("File or directory not found\n");
-                return (1);
-            }
-        if (execvp(&(command[0].token[0].ch[2]), args) == 0)
-        {
-            free(args);
-            exit(EXIT_SUCCESS);
-        }
+        perror("Failed to allocate memory\n");
+        exit(EXIT_FAILURE);
     }
 
+    // Add the new element
+    args[(*length) - 1] = token;
+
+    return args;
+}
+
+int try_execute(char *path, Command *cmd)
+{
     struct stat buffer;
-    char path[6][BUF_SIZE];
-    strcpy(path[0], "/usr/local/sbin");
-    strcpy(path[1], "/usr/local/bin");
-    strcpy(path[2], "/usr/sbin");
-    strcpy(path[3], "/usr/bin");
-    strcpy(path[4], "/sbin");
-    strcpy(path[5], "/bin");
-
-    for (int i = 0; i < 6; i++)
+    if (stat(path, &buffer) == 0) // file found
     {
-        strcat(path[i], "/");
-        strcat(path[i], command->token->ch); // current path test + given bare name
-        if (stat(path[i], &buffer) == 0)     // file found
+        if (buffer.st_mode & S_IXUSR || buffer.st_mode & S_IXGRP || buffer.st_mode & S_IXOTH) // checks executable permissions
         {
-            if (buffer.st_mode & S_IXUSR || buffer.st_mode & S_IXGRP || buffer.st_mode & S_IXOTH) // checks executable permissions
+            // Create a new array with the command name as the first argument
+            char **exec_args = malloc((cmd->arg_length + 2) * sizeof(char *)); // +2 for the command name and NULL terminator
+            exec_args[0] = cmd->path;
+            for (int j = 0; j < cmd->arg_length; j++)
             {
-                if (execv(path[i], args) == -1)
-                {
-                    perror("Failed to execute command");
-                    free(args);
-                    exit(EXIT_FAILURE);
-                }
-                free(args);
-                exit(EXIT_SUCCESS);
+                exec_args[j + 1] = cmd->args[j];
             }
-            else // cant be executed
+            exec_args[cmd->arg_length + 1] = NULL; // NULL-terminate the array
+
+            if (execv(path, exec_args) == -1)
             {
-                printf("Error: file cannot be executed\n");
-                free(args);
+                perror("Failed to execute command");
                 exit(EXIT_FAILURE);
             }
+            free(exec_args); // Free the temporary array, no need to free the contents as they are pointing to existing strings
+            exit(EXIT_SUCCESS);
         }
+        else // cant be executed
+        {
+            perror("Error: file cannot be executed");
+            exit(EXIT_FAILURE);
+        }
+    }
+    return -1; // file not found
+}
+
+int non_built_in(Command *cmd)
+{
+
+    // Check if the command path starts with '/'
+    if (cmd->path[0] == '/' && try_execute(cmd->path, cmd) == EXIT_SUCCESS)
+    {
+        return EXIT_SUCCESS;
+    }
+
+    // Handle bare name
+    char path[PATH_MAX];
+    char *prefixes[] = {
+        "/usr/local/sbin/",
+        "/usr/local/bin/",
+        "/usr/sbin/",
+        "/usr/bin/",
+        "/sbin/",
+        "/bin/"};
+    int num_prefixes = sizeof(prefixes) / sizeof(char *);
+
+    for (int i = 0; i < num_prefixes; i++)
+    {
+        strcpy(path, prefixes[i]);
+        strcat(path, cmd->path); // current path test + given bare name
+        if (try_execute(path, cmd) == EXIT_SUCCESS)
+            return EXIT_SUCCESS;
     }
 
     perror("Failed to execute command");
-    free(args);
     exit(EXIT_FAILURE);
 }
 
-int wild_equals(char* wild_string, char* fixed_string){
-    int wild_string_length = strlen(wild_string);
-    int fixed_string_length = strlen(fixed_string);
-    for (int i = 0; wild_string[i] != '*'; i++)
-        if (fixed_string[i] != wild_string[i] 
-          || i == fixed_string_length)
-            return 0;
-    for (int i = 0; wild_string[wild_string_length - i] != '*'; i++){
-        if (fixed_string[fixed_string_length - i] != wild_string[wild_string_length - i]
-          || i < 0)
-            return 0;
-    }
-    return 1;
-}
-
-cmd * dup_cmd(cmd* old)
+int execute_command(Command *cmd)
 {
-    cmd* new = malloc(sizeof(cmd));
-    new->token = malloc (old->tokens * sizeof(tok));
-    memcpy(new->token, old->token, sizeof(tok) * old->tokens);
-    new->tokens = old->tokens;
-    new->infd = old->infd;
-    old->outfd = old->outfd;
-    return new;
-}
-
-void run_wild (cmd* wild_cmd, int wild_ind){
-
-    char* wild_string = wild_cmd->token[wild_ind].ch;
-    
-    int wild_strlen = strlen (wild_string);
-        int last_slash_ind = -1;
-        for (int i = wild_strlen - 1; i>=0; i--){
-            if (wild_string[i] == '/'){
-                last_slash_ind = i;
-                break;
-            }
-        }
-
-        char wild_part [BUF_SIZE+1];
-        char path [BUF_SIZE+1];
-        for(int i = 0; i < BUF_SIZE+1; i++){
-            wild_part[i] = 0;
-            path[i] = 0;
-        }
-
-        
-        for (int i = 0; i < last_slash_ind; i++)
-            path[i] = wild_string[i];
-        for (int i = last_slash_ind + 1; i < wild_strlen; i++){
-            wild_part[i - last_slash_ind - 1] = wild_string[i]; 
-        }
-
-        
-        DIR* search_directory;
-        if(last_slash_ind == -1){
-            search_directory = opendir(".");
-        }else if (path[0] == 0){
-            chdir("/");
-            search_directory = opendir(".");
-        }
-        else if (path[0] == '~'){
-            chdir(getenv("HOME"));
-            if (path[2] == 0){
-                search_directory = opendir(".");
-            }else{
-                search_directory = opendir(path+2);
-            }
-        }
-        else search_directory = opendir(path);
-        struct dirent* search_item;
-        while((search_item = readdir(search_directory)) != NULL){
-            char* real_name = search_item->d_name;
-            //printf("Wild name: %s\n", wild_part);
-            //printf("found file: %s\n\n ", real_name);
-            if (wild_equals(wild_part, real_name)){
-                
-                cmd* new = dup_cmd(wild_cmd);
-                memset(&new->token[wild_ind].ch, 0, BUF_SIZE);
-                strcpy(new->token[wild_ind].ch, real_name);
-                //printf("Command: %s\n", new->token->ch);
-                runCmd(new);
-                freeCmd(new);
-            }
-        }
-        closedir(search_directory);
-}
-
-int execute(cmd *cmd, int in, int out)
-{
-    // command is pwd
-    if (strcmp(cmd->token[0].ch, "pwd") == 0)
+    // Built-in pwd and cd checks before moving onto scanning files for executables
+    if (strcmp(cmd->path, "pwd") == 0)
     {
-        char buff[BUF_SIZE+1];
-        getcwd(buff, BUF_SIZE); // verify pwd works
-        printf("%s\n", buff);
-        return EXIT_SUCCESS;
-    }
+        char cwd[PATH_MAX];
 
-    else if (strcmp(cmd->token[0].ch, "cd") == 0) // change directory
-    {
-        // cd NULL will take us to home directory
-        if (cmd->tokens == 1)
+        if (getcwd(cwd, sizeof(cwd)) != NULL)
         {
-            if (chdir(getenv("HOME")) == -1)
-            {
-                printf("cd: No such file or directory\n");
-
-                return EXIT_FAILURE;
-            }
-            return EXIT_SUCCESS;
-        } 
-        else if (cmd->token[1].ch[0] == '~'){
-            if (chdir(getenv("HOME")) == -1)
-            {
-                printf("cd: No such file or directory\n");
-
-                return EXIT_FAILURE;
-            }
-            if (cmd->token[1].ch[2] != 0)
-            chdir(&cmd->token[1].ch[2]);
+            write(cmd->fd_out, cwd, strlen(cwd));
+            write(cmd->fd_out, "\n", 1);
+            if(cmd->fd_out != STDOUT_FILENO)
+                close(cmd->fd_out);
             return EXIT_SUCCESS;
         }
-
-        else if (chdir(cmd->token[1].ch) == -1)
+        else
         {
-            // May need to change based on interactions with batch mode
-            printf("cd: No such file or directory\n");
-
+            perror("getcwd() error");
             return EXIT_FAILURE;
         }
-        return EXIT_SUCCESS;
+    }
+    else if (strcmp(cmd->path, "cd") == 0)
+    {
+        if (cmd->arg_length != 1)
+            return EXIT_FAILURE;
+        else
+        {
+            if (chdir(cmd->args[0]) == 0)
+            {
+                return EXIT_SUCCESS;
+            }
+            else
+            {
+                perror("cd");
+                return EXIT_FAILURE;
+            }
+        }
     }
 
     // Fork process
@@ -275,27 +219,27 @@ int execute(cmd *cmd, int in, int out)
     }
     else if (pid == 0) // Child process
     {
-        if (in != STDIN_FILENO) // handle input redirection
+        if (cmd->fd_in != STDIN_FILENO) // handle input redirection
         {
-            if (dup2(in, STDIN_FILENO) == -1)
+            if (dup2(cmd->fd_in, STDIN_FILENO) == -1)
             {
                 perror("Failed to redirect input");
                 exit(EXIT_FAILURE);
             }
-            close(in);
+            close(cmd->fd_in);
         }
 
-        if (out != STDOUT_FILENO) // handle output redirection
+        if (cmd->fd_out != STDOUT_FILENO) // handle output redirection
         {
-            if (dup2(out, STDOUT_FILENO) == -1)
+            if (dup2(cmd->fd_out, STDOUT_FILENO) == -1)
             {
                 perror("Failed to redirect output");
                 exit(EXIT_FAILURE);
             }
-            close(out);
+            close(cmd->fd_out);
         }
 
-        if (bareName(cmd) == -1)
+        if (non_built_in(cmd) == -1)
         {
             perror("Failed to execute command");
             exit(EXIT_FAILURE);
@@ -311,195 +255,191 @@ int execute(cmd *cmd, int in, int out)
             perror("Failed to wait for child process");
             return EXIT_FAILURE;
         }
+
+        if (cmd->fd_in != STDIN_FILENO) // closing input redirection
+            close(cmd->fd_in);
+        if (cmd->fd_out != STDOUT_FILENO) // closing output redirection
+            close(cmd->fd_out);
+
         return WEXITSTATUS(status);
     }
-    // Control should never reach here
-    printf("check end of execute - TESTING\n");
-    return -1;
+    return EXIT_FAILURE;
 }
 
-int runCmd(cmd *run)
+// Deprecated?
+char **tokenizer(char *buf)
 {
-    //no input
-    if(strcmp(run->token->ch, "") == 0)
-        return EXIT_SUCCESS;
-        
-    int end_of_pipe = 1;
-    // check for the exit command
-    char exit_literal[5] = "exit";
-    if (strcmp(exit_literal, run->token[0].ch) == 0)
-    {
-        return (MYEXIT);
-    }
 
-    // check for wild cards, pass it on if so
-    for (int tokInd = 0; tokInd < run->tokens; tokInd++)
-    {
-        int i = 0;
-        char ch;
-        while ((ch = run->token[tokInd].ch[i++]) != 0)
-        {
-            if (ch == '*')
-            {
-                run_wild(run, tokInd);
-                return WILD_CARD;
-            }
-        }
-    }
-
-    cmd *currCmd = newCmd();
-    int currTokInd = 0;
-    for (int tokInd = 0; tokInd < run->tokens; tokInd++)
-    {
-        char first_char = run->token[tokInd].ch[0];
-        // printf("%c,%d\n", first_char, currTokInd);
-        //  ensure that no consecutive tokens or last token are special characters
-        if ((currTokInd == 0 || tokInd == run->tokens - 1) && (first_char == '<' || first_char == '>' || first_char == '|'))
-        {
-            continue;
-            return EXIT_FAILURE;
-        }
-
-        // redirect the stdin for the < token
-        if (first_char == '<')
-        {
-            // printf("line 239 redirect input \n");
-            currCmd->infd = open(run->token[++tokInd].ch, O_RDONLY);
-            if (currCmd->infd < 0)
-            {
-                printf("File not found\n");
-                return EXIT_FAILURE;
-            }
-        } // redirect stdout for the > token
-        else if (first_char == '>')
-        {
-            currCmd->outfd = open(run->token[++tokInd].ch, O_WRONLY | O_TRUNC | O_CREAT, 0640);
-            if (currCmd->outfd < 0)
-            {
-                perror("File not found\n");
-                return EXIT_FAILURE;
-            }
-        } // handle the pipe condition
-        else if (first_char == '|')
-        {
-            int myPipe[2];
-            if (pipe(myPipe) < 0)
-            {
-                perror("Pipe failed!\n");
-                exit(1);
-            }
-            int pid = fork();
-            if (pid < 0)
-            {
-                perror("Fork failed\n");
-                exit(1);
-            }
-            else if (pid > 0)
-            { // parent process, waiting for child
-                close(myPipe[1]);
-                freeCmd(currCmd);
-                currCmd = newCmd(); // parent discards currCmd, child runs it
-                currCmd->infd = myPipe[0];
-                wait(NULL);
-                currTokInd = -1; // parent starts parsing a new command
-            }
-            else
-            { // child process
-                end_of_pipe = 0;
-                currCmd->outfd = myPipe[1];
-                close(myPipe[0]);
-                break; // child process leaves the parsing loop to exec
-            }
-        }
-        else if (first_char == 0)
-            continue;
-        else
-            addToken(currCmd, run->token[tokInd].ch);
-        currTokInd++;
-    }
-    int e = execute(currCmd, currCmd->infd, currCmd->outfd);
-
-    if(currCmd->outfd != STDOUT_FILENO)
-        close(currCmd->outfd);
-    if(currCmd->infd != STDIN_FILENO)
-        close(currCmd->infd);
-
-    freeCmd(currCmd);
-    if (!end_of_pipe)
-        exit(0);
-    return e;
+    return NULL;
 }
 
-int main(int argc, char *argv[])
+int main(int argc, char **argv)
 {
-    int interactive = 1;
-    // batch mode setup
+
+    install_handlers();
+
+    if(argc == 1)
+        write(STDOUT_FILENO, "Welcome to my shell!\n", 21);
+
+    // variables for buffer
+    char c;
+    char buf[BUFSIZ];
+    int bytes, pos;
+    int inputRedirect = false, outputRedirect = false;
+
     if (argc > 1)
     {
         int batchFD = open(argv[1], O_RDONLY);
-        dup2(batchFD, STDIN_FILENO); // setting stdin
+        dup2(batchFD, STDIN_FILENO);
         close(batchFD);
-        interactive = 0;
     }
 
-    cmd *currCmd = newCmd();
-    char currTok[BUF_SIZE]; // (TO_DO) make token size expandable
-    memset(currTok, 0, BUF_SIZE);
-    char ch;
-    if (interactive)
+    while (active)
     {
-        fprintf(stderr, "Welcome to my shell!\nmysh> ");
-    }
-    for (int chInd = 0; read(0, &ch, 1) == 1; chInd++)
-    {
-        if (ch == '<' || ch == '>' || ch == '|' || ch == '\n' || ch == ' ')
+        if (argc <= 1)
+            write(STDOUT_FILENO, "mysh> ", 6);
+
+        pos = 0;
+        Command *curr_command = newCommand();
+        while ((bytes = read(STDIN_FILENO, &c, 1)) >= 0)
         {
-            // add previous token to command
-            if (currTok[0] != 0)
+            if (bytes < 0)
             {
-                addToken(currCmd, currTok);
-                for (int i = 0; i < BUF_SIZE; i++)
-                    currTok[i] = 0;
+                perror("read error");
+                break;
             }
-
-            if (ch == '<' || ch == '>' || ch == '|')
+            else if (c == ' ' || bytes == 0 || c == '\n' || c == '<' || c == '>') // end of command (newline or EOF) or a delimiter
             {
-                currTok[0] = ch;
-                addToken(currCmd, currTok);
-                currTok[0] = 0;
-            }
-
-            else if (ch == '\n')
-            {
-                int status = runCmd(currCmd);
-                if (status == MYEXIT)
-                {
-                    freeCmd(currCmd);
-                    fprintf(stderr, "mysh: exiting\n");
-                    exit(EXIT_SUCCESS);
+                if(pos == 0){ //Skips/overwrites blank tokens
+                    if (c == '<')
+                    {
+                        inputRedirect = true;
+                    }
+                    else if (c == '>')
+                    {
+                        outputRedirect = true;
+                    }
+                    else if(bytes == 0){ //blank newline at end of a bash script
+                        freeCommand(curr_command);
+                        goto batch_exit;
+                    }
+                    continue;
                 }
-                else if (status == EXIT_FAILURE && interactive)
-                {
-                    fprintf(stderr, "!");
+                buf[pos] = '\0';
+                if (curr_command->path[0] == '\0')
+                { // executable is uninitialized
+                    strcpy(curr_command->path, buf);
                 }
-                // free old command before generating new command
-                freeCmd(currCmd);
+                // handling redirections
+                else if (inputRedirect)
+                {
+                    if((curr_command->fd_in = open(buf, O_RDONLY)) == -1)
+                        perror("open error");
+                    inputRedirect = false;
+                }
+                else if (outputRedirect)
+                {
+                    if((curr_command->fd_out = open(buf, O_WRONLY | O_CREAT | O_TRUNC, 0640)) == -1)
+                        perror("open error");
+                    outputRedirect = false;
+                }
+                else
+                {
+                    char *arg = strdup(buf); // making copy of argument
 
-                // allocate a new command struct
-                currCmd = newCmd();
-                if (interactive)
-                    fprintf(stderr, "mysh> ");
+                    // if argument contains wildcard character
+                    if (strchr(arg, '*') != NULL)
+                    {
+                        glob_t glob_result;
+                        glob(arg, 0, NULL, &glob_result);
+                        if (glob_result.gl_pathc == 0)
+                        { // No matching wildcard expansion
+                            curr_command->args = add_to_args(curr_command->args, &curr_command->arg_length, arg);
+                        }
+                        else
+                        { // Matching wildcard expansion, free original arg containing wildcard character
+                            free(arg);
+                            for (unsigned int i = 0; i < glob_result.gl_pathc; ++i)
+                            {
+                                char *arg_copy = strdup(glob_result.gl_pathv[i]);
+                                curr_command->args = add_to_args(curr_command->args, &curr_command->arg_length, arg_copy);
+                            }
+                        }
+                        globfree(&glob_result);
+                    }
+                    else // no wildcard character
+                    {
+                        curr_command->args = add_to_args(curr_command->args, &curr_command->arg_length, arg);
+                    }
+                }
+
+                // Checks for redirect delimiters
+                if (c == '<')
+                {
+                    inputRedirect = true;
+                }
+                else if (c == '>')
+                {
+                    outputRedirect = true;
+                }
+
+                if (bytes == 0 || c == '\n') // end of command (newline or EOF)
+                {
+                    // tokenizer(buf);
+                    if (strcmp(curr_command->path, "exit") == 0) // Check for user exiting shell
+                    {
+                        freeCommand(curr_command);
+                        goto shell_exit;
+                    }
+                    else
+                    {
+                        if (execute_command(curr_command) == EXIT_FAILURE)
+                        {
+                            write(STDOUT_FILENO, "!", 1);
+                        }
+                    }
+                    /* TESTING FOR PARSING
+                    printf("Testing executable parsing: %s\n", curr_command->path);
+                    for (int i = 0; i < curr_command->arg_length; i++)
+                    {
+                        printf("Testing argument parsing %d: %s\n", i, curr_command->args[i]);
+                    }
+                    */
+
+                    if (bytes == 0)
+                    {
+                        freeCommand(curr_command);
+                        goto batch_exit;
+                    }
+
+                    break;
+                }
+
+                memset(buf, 0, BUFSIZ);
+                pos = 0;
             }
-            chInd = -1;
+            else
+            {
+                buf[pos++] = c;
+            }
         }
-        else
-        {
-            currTok[chInd] = ch;
+
+        freeCommand(curr_command);
+
+        if (!active)
+        { // Checking for CTRL+C signal
+            write(STDOUT_FILENO, "\n", 1);
+            goto shell_exit;
         }
     }
-    addToken(currCmd, currTok);
 
-    runCmd(currCmd);
-    freeCmd(currCmd);
+    if (0)
+    { // This is accessed only by the user typing "exit" or sending SIGINT
+    shell_exit:
+        write(STDOUT_FILENO, "mysh: exiting\n", 15);
+    }
+    batch_exit:
+    // Free remaining resources here (if any)
+
     return EXIT_SUCCESS;
 }
