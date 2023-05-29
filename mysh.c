@@ -16,7 +16,7 @@
 /*
 TO-DO:
 Refactor to get rid of dirty gotos
-Test path names (broken I believe, doesn't allow me to run ./mysh)
+Test path names (fixed?)
 Finish wildcards (expansion and directory works, but need to implement for commands as well such as ec*o)
 Implement pipes
 Implement all extensions - wildcard directories done
@@ -142,10 +142,13 @@ int try_execute(char *path, Command *cmd)
 int non_built_in(Command *cmd)
 {
 
-    // Check if the command path starts with '/'
-    if (cmd->path[0] == '/' && try_execute(cmd->path, cmd) == EXIT_SUCCESS)
+    // Check if the command path contains '/'
+    if (strchr(cmd->path, '/') != NULL)
     {
-        return EXIT_SUCCESS;
+        if(try_execute(cmd->path, cmd) == EXIT_SUCCESS)
+            return EXIT_SUCCESS;
+        else
+            return EXIT_FAILURE;
     }
 
     // Handle bare name
