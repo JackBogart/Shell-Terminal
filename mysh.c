@@ -17,7 +17,6 @@
 TO-DO:
 Refactor to get rid of dirty gotos
 Test path names (fixed?)
-Finish wildcards (expansion and directory works, but need to implement for commands as well such as ec*o)
 Implement pipes
 Implement all extensions - wildcard directories done
 Verify batch mode still works(should be the same but use fd instead of STDIN)
@@ -85,8 +84,14 @@ void freeCommand(Command *cmd)
 /*
 Dynamic arraylist of arguments for a command.
 */
-char **add_to_args(char **args, int *length, char *token)
+char **add_to_args(Command *cmd, char **args, int *length, char *token)
 {
+    if (cmd->path[0] == '\0')
+    { // executable is uninitialized, add it as the command path instead of an argument
+        strcpy(cmd->path, token);
+        free(token); //freeing previous argument dupllicated by strdup
+        return args;
+    }
     // Increase the length of the array
     (*length)++;
 
@@ -329,12 +334,8 @@ int main(int argc, char **argv)
                     continue;
                 }
                 buf[pos] = '\0';
-                if (curr_command->path[0] == '\0')
-                { // executable is uninitialized
-                    strcpy(curr_command->path, buf);
-                }
                 // handling redirections
-                else if (inputRedirect)
+                if (inputRedirect)
                 {
                     if((curr_command->fd_in = open(buf, O_RDONLY)) == -1)
                         perror("open error");
@@ -357,7 +358,7 @@ int main(int argc, char **argv)
                         glob(arg, 0, NULL, &glob_result);
                         if (glob_result.gl_pathc == 0)
                         { // No matching wildcard expansion
-                            curr_command->args = add_to_args(curr_command->args, &curr_command->arg_length, arg);
+                            curr_command->args = add_to_args(curr_command, curr_command->args, &curr_command->arg_length, arg);
                         }
                         else
                         { // Matching wildcard expansion, free original arg containing wildcard character
@@ -365,14 +366,14 @@ int main(int argc, char **argv)
                             for (unsigned int i = 0; i < glob_result.gl_pathc; ++i)
                             {
                                 char *arg_copy = strdup(glob_result.gl_pathv[i]);
-                                curr_command->args = add_to_args(curr_command->args, &curr_command->arg_length, arg_copy);
+                                curr_command->args = add_to_args(curr_command, curr_command->args, &curr_command->arg_length, arg_copy);
                             }
                         }
                         globfree(&glob_result);
                     }
                     else // no wildcard character
                     {
-                        curr_command->args = add_to_args(curr_command->args, &curr_command->arg_length, arg);
+                        curr_command->args = add_to_args(curr_command, curr_command->args, &curr_command->arg_length, arg);
                     }
                 }
 
