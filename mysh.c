@@ -290,7 +290,7 @@ int main(int argc, char **argv)
     char c;
     char buf[BUFSIZ];
     int bytes, pos;
-    int inputRedirect = false, outputRedirect = false;
+    int inputRedirect = false, outputRedirect = false, escapeChar = false;
 
     if (argc > 1)
     {
@@ -313,7 +313,7 @@ int main(int argc, char **argv)
                 perror("read error");
                 break;
             }
-            else if (c == ' ' || bytes == 0 || c == '\n' || c == '<' || c == '>') // end of command (newline or EOF) or a delimiter
+            else if ((c == ' ' || bytes == 0 || c == '\n' || c == '<' || c == '>') && escapeChar == false) // end of command (newline or EOF) or a delimiter
             {
                 if(pos == 0 && c != '\n'){ //Skips/overwrites blank tokens
                     if (c == '<')
@@ -353,8 +353,26 @@ int main(int argc, char **argv)
                     {
                         glob_t glob_result;
                         glob(arg, 0, NULL, &glob_result);
-                        if (glob_result.gl_pathc == 0)
-                        { // No matching wildcard expansion
+                        if (glob_result.gl_pathc == 0) { // No matching wildcard expansion
+                            if (strstr(arg, "\\*") != NULL) { // If the argument contained an escaped wildcard, remove the backslash
+                                char *temp = malloc(strlen(arg));
+                                int j = 0;
+                                for (int i = 0; arg[i]; ++i)
+                                {
+                                    if (arg[i] == '\\' && arg[i + 1] == '*')
+                                    {
+                                        temp[j++] = '*';
+                                        i++; // skip the next character
+                                    }
+                                    else
+                                    {
+                                        temp[j++] = arg[i];
+                                    }
+                                }
+                                temp[j] = '\0';
+                                free(arg);
+                                arg = temp;
+                            }
                             curr_command->args = add_to_args(curr_command, curr_command->args, &curr_command->arg_length, arg);
                         }
                         else
@@ -408,8 +426,8 @@ int main(int argc, char **argv)
                     for (int i = 0; i < curr_command->arg_length; i++)
                     {
                         printf("Testing argument parsing %d: %s\n", i, curr_command->args[i]);
-                    }
-                    */
+                    }*/
+                    
 
                     if (bytes == 0)
                     {
@@ -423,9 +441,15 @@ int main(int argc, char **argv)
                 memset(buf, 0, BUFSIZ);
                 pos = 0;
             }
-            else
+            else if(c == '\\' && escapeChar == false){
+                escapeChar = true;
+            }
+            else if(c != '\n')
             {
+                if(escapeChar == true && c == '*')
+                    buf[pos++] = '\\';
                 buf[pos++] = c;
+                escapeChar = false; //If escape sequence was used
             }
         }
 
