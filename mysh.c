@@ -86,8 +86,10 @@ void freeCommand(Command *cmd)
     free(cmd);
 }
 
-void freeCommandList(Command **cmdArray, int length) {
-    for (int i = 0; i < length; i++) {
+void freeCommandList(Command **cmdArray, int length)
+{
+    for (int i = 0; i < length; i++)
+    {
         freeCommand(cmdArray[i]);
     }
 }
@@ -215,7 +217,7 @@ int execute_command(Command *cmd)
     }
     else if (strcmp(cmd->path, "cd") == 0)
     {
-        if (cmd->arg_length >= 1)
+        if (cmd->arg_length > 1)
             return EXIT_FAILURE;
         else
         {
@@ -335,6 +337,15 @@ int main(int argc, char **argv)
                     {
                         outputRedirect = true;
                     }
+                    else if (c == '|')
+                    {
+                        int fd[2];
+                        pipe(fd);
+                        commands[command_count - 1]->fd_out = fd[1];
+                        curr_command = newCommand();
+                        curr_command->fd_in = fd[0];
+                        commands[command_count++] = curr_command;
+                    }
                     else if (bytes == 0)
                     { // blank newline at end of a bash script
                         freeCommandList(commands, command_count);
@@ -435,15 +446,16 @@ int main(int argc, char **argv)
                     {
                         for (int i = 0; i < command_count; ++i)
                         {
-                            if (execute_command(commands[command_count-1]) == EXIT_FAILURE)
+                            if (execute_command(commands[i]) == EXIT_FAILURE)
                             {
-                                write(STDOUT_FILENO, "!", 1);
+                                if(argc <= 1)
+                                    write(STDOUT_FILENO, "!", 1);
                                 break;
                             }
-                            if (commands[command_count-1]->fd_in != STDIN_FILENO) // closing input redirection
-                                close(commands[command_count-1]->fd_in);
-                            if (commands[command_count-1]->fd_out != STDOUT_FILENO) // closing output redirection
-                                close(commands[command_count-1]->fd_out);
+                            if (commands[i]->fd_in != STDIN_FILENO) // closing input redirection
+                                close(commands[i]->fd_in);
+                            if (commands[i]->fd_out != STDOUT_FILENO) // closing output redirection
+                                close(commands[i]->fd_out);
                         }
                     }
                     /* TESTING FOR PARSING
