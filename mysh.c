@@ -12,6 +12,7 @@
 
 #define true 1
 #define false 0
+#define MAX_COMMANDS 16
 
 /*
 TO-DO:
@@ -68,7 +69,6 @@ Command *newCommand()
     new_command->fd_out = STDOUT_FILENO;
     return new_command;
 }
-
 /*
 Frees a given command.
 */
@@ -84,6 +84,12 @@ void freeCommand(Command *cmd)
     }
     free(cmd->path);
     free(cmd);
+}
+
+void freeCommandList(Command **cmdArray, int length) {
+    for (int i = 0; i < length; i++) {
+        freeCommand(cmdArray[i]);
+    }
 }
 
 /*
@@ -213,7 +219,8 @@ int execute_command(Command *cmd)
             return EXIT_FAILURE;
         else
         {
-            if(cmd->arg_length == 0 && chdir(getenv("HOME")) == 0){
+            if (cmd->arg_length == 0 && chdir(getenv("HOME")) == 0)
+            {
                 return EXIT_SUCCESS;
             }
             else if (chdir(cmd->args[0]) == 0)
@@ -279,13 +286,6 @@ int execute_command(Command *cmd)
     return EXIT_FAILURE;
 }
 
-// Deprecated?
-char **tokenizer(char *buf)
-{
-
-    return NULL;
-}
-
 int main(int argc, char **argv)
 {
 
@@ -297,7 +297,8 @@ int main(int argc, char **argv)
     // variables for buffer
     char c;
     char buf[BUFSIZ];
-    int bytes, pos;
+    Command *commands[MAX_COMMANDS];
+    int bytes, pos, command_count = 0;
     int inputRedirect = false, outputRedirect = false, escapeChar = false, homeEnv = true;
 
     if (argc > 1)
@@ -314,6 +315,7 @@ int main(int argc, char **argv)
 
         pos = 0;
         Command *curr_command = newCommand();
+        commands[command_count++] = curr_command;
         while ((bytes = read(STDIN_FILENO, &c, 1)) >= 0)
         {
             if (bytes < 0)
@@ -321,7 +323,7 @@ int main(int argc, char **argv)
                 perror("read error");
                 break;
             }
-            else if ((c == ' ' || bytes == 0 || c == '\n' || c == '<' || c == '>') && escapeChar == false) // end of command (newline or EOF) or a delimiter
+            else if ((c == ' ' || bytes == 0 || c == '\n' || c == '<' || c == '>' || c == '|') && escapeChar == false) // end of command (newline or EOF) or a delimiter
             {
                 if (pos == 0 && c != '\n')
                 { // Skips/overwrites blank tokens
@@ -335,7 +337,8 @@ int main(int argc, char **argv)
                     }
                     else if (bytes == 0)
                     { // blank newline at end of a bash script
-                        freeCommand(curr_command);
+                        freeCommandList(commands, command_count);
+                        command_count = 0;
                         goto batch_exit;
                     }
                     continue;
@@ -411,25 +414,37 @@ int main(int argc, char **argv)
                 {
                     outputRedirect = true;
                 }
-
+                else if (c == '|')
+                {
+                    int fd[2];
+                    pipe(fd);
+                    commands[command_count - 1]->fd_out = fd[1];
+                    curr_command = newCommand();
+                    curr_command->fd_in = fd[0];
+                    commands[command_count++] = curr_command;
+                }
                 if (bytes == 0 || c == '\n') // end of command (newline or EOF)
                 {
-                    // tokenizer(buf);
                     if (strcmp(curr_command->path, "exit") == 0) // Check for user exiting shell
                     {
-                        freeCommand(curr_command);
+                        freeCommandList(commands, command_count);
+                        command_count = 0;
                         goto shell_exit;
                     }
-                    else
+                    else // executing command
                     {
-                        if (execute_command(curr_command) == EXIT_FAILURE)
+                        for (int i = 0; i < command_count; ++i)
                         {
-                            write(STDOUT_FILENO, "!", 1);
+                            if (execute_command(commands[command_count-1]) == EXIT_FAILURE)
+                            {
+                                write(STDOUT_FILENO, "!", 1);
+                                break;
+                            }
+                            if (commands[command_count-1]->fd_in != STDIN_FILENO) // closing input redirection
+                                close(commands[command_count-1]->fd_in);
+                            if (commands[command_count-1]->fd_out != STDOUT_FILENO) // closing output redirection
+                                close(commands[command_count-1]->fd_out);
                         }
-                        if (curr_command->fd_in != STDIN_FILENO) // closing input redirection
-                            close(curr_command->fd_in);
-                        if (curr_command->fd_out != STDOUT_FILENO) // closing output redirection
-                            close(curr_command->fd_out);
                     }
                     /* TESTING FOR PARSING
                     printf("Testing executable parsing: %s\n", curr_command->path);
@@ -440,7 +455,8 @@ int main(int argc, char **argv)
 
                     if (bytes == 0)
                     {
-                        freeCommand(curr_command);
+                        freeCommandList(commands, command_count);
+                        command_count = 0;
                         goto batch_exit;
                     }
 
@@ -461,7 +477,8 @@ int main(int argc, char **argv)
                 if (escapeChar == true && c == '*')
                     buf[pos++] = '\\';
                 buf[pos++] = c;
-                if(pos == 1 && buf[0] == '~' && homeEnv == true){ //Token beginning with ~ and no escape sequence was used, set to home environment
+                if (pos == 1 && buf[0] == '~' && homeEnv == true)
+                { // Token beginning with ~ and no escape sequence was used, set to home environment
                     char *homePath = getenv("HOME");
                     strcpy(buf, homePath);
                     pos = strlen(homePath);
@@ -470,7 +487,8 @@ int main(int argc, char **argv)
             }
         }
 
-        freeCommand(curr_command);
+        freeCommandList(commands, command_count);
+        command_count = 0;
 
         if (!active)
         { // Checking for CTRL+C signal
