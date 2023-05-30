@@ -181,6 +181,8 @@ int non_built_in(Command *cmd)
 
 int execute_command(Command *cmd)
 {
+    if(cmd->path[0] == '\0') //Empty command
+        return EXIT_SUCCESS;
     // Built-in pwd and cd checks before moving onto scanning files for executables
     if (strcmp(cmd->path, "pwd") == 0)
     {
@@ -318,7 +320,7 @@ int main(int argc, char **argv)
             }
             else if (c == ' ' || bytes == 0 || c == '\n' || c == '<' || c == '>') // end of command (newline or EOF) or a delimiter
             {
-                if(pos == 0){ //Skips/overwrites blank tokens
+                if(pos == 0 && c != '\n'){ //Skips/overwrites blank tokens
                     if (c == '<')
                     {
                         inputRedirect = true;
