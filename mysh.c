@@ -17,8 +17,13 @@
 TO-DO:
 Refactor to get rid of dirty gotos
 Test path names (fixed?)
-Implement pipes
-Implement all extensions - wildcard directories done
+Implement pipes <- Multiple additions require piping to implement/test. Must work on ASAP. Once this is complete the program is mostly done besides implementing the remaining extensions and testing
+EXTENSION CHECKLIST
+1. Escape sequences - Done (Needs further testing)
+2. Home directory - Done (Needs further testing)
+3. Directory wildcards - Done
+4. Multiple Pipes - Need to implement pipes, should be done with implementation
+5. Combining with && and || - Seems to work very similar to piping, will wait to complete piping
 Verify batch mode still works(should be the same but use fd instead of STDIN)
 */
 
@@ -89,7 +94,7 @@ char **add_to_args(Command *cmd, char **args, int *length, char *token)
     if (cmd->path[0] == '\0')
     { // executable is uninitialized, add it as the command path instead of an argument
         strcpy(cmd->path, token);
-        free(token); //freeing previous argument dupllicated by strdup
+        free(token); // freeing previous argument dupllicated by strdup
         return args;
     }
     // Increase the length of the array
@@ -150,7 +155,7 @@ int non_built_in(Command *cmd)
     // Check if the command path contains '/'
     if (strchr(cmd->path, '/') != NULL)
     {
-        if(try_execute(cmd->path, cmd) == EXIT_SUCCESS)
+        if (try_execute(cmd->path, cmd) == EXIT_SUCCESS)
             return EXIT_SUCCESS;
         else
             return EXIT_FAILURE;
@@ -181,7 +186,7 @@ int non_built_in(Command *cmd)
 
 int execute_command(Command *cmd)
 {
-    if(cmd->path[0] == '\0') //Empty command
+    if (cmd->path[0] == '\0') // Empty command
         return EXIT_SUCCESS;
     // Built-in pwd and cd checks before moving onto scanning files for executables
     if (strcmp(cmd->path, "pwd") == 0)
@@ -192,7 +197,7 @@ int execute_command(Command *cmd)
         {
             write(cmd->fd_out, cwd, strlen(cwd));
             write(cmd->fd_out, "\n", 1);
-            if(cmd->fd_out != STDOUT_FILENO)
+            if (cmd->fd_out != STDOUT_FILENO)
                 close(cmd->fd_out);
             return EXIT_SUCCESS;
         }
@@ -204,11 +209,14 @@ int execute_command(Command *cmd)
     }
     else if (strcmp(cmd->path, "cd") == 0)
     {
-        if (cmd->arg_length != 1)
+        if (cmd->arg_length >= 1)
             return EXIT_FAILURE;
         else
         {
-            if (chdir(cmd->args[0]) == 0)
+            if(cmd->arg_length == 0 && chdir(getenv("HOME")) == 0){
+                return EXIT_SUCCESS;
+            }
+            else if (chdir(cmd->args[0]) == 0)
             {
                 return EXIT_SUCCESS;
             }
@@ -283,14 +291,14 @@ int main(int argc, char **argv)
 
     install_handlers();
 
-    if(argc == 1)
+    if (argc == 1)
         write(STDOUT_FILENO, "Welcome to my shell!\n", 21);
 
     // variables for buffer
     char c;
     char buf[BUFSIZ];
     int bytes, pos;
-    int inputRedirect = false, outputRedirect = false, escapeChar = false;
+    int inputRedirect = false, outputRedirect = false, escapeChar = false, homeEnv = true;
 
     if (argc > 1)
     {
@@ -315,7 +323,8 @@ int main(int argc, char **argv)
             }
             else if ((c == ' ' || bytes == 0 || c == '\n' || c == '<' || c == '>') && escapeChar == false) // end of command (newline or EOF) or a delimiter
             {
-                if(pos == 0 && c != '\n'){ //Skips/overwrites blank tokens
+                if (pos == 0 && c != '\n')
+                { // Skips/overwrites blank tokens
                     if (c == '<')
                     {
                         inputRedirect = true;
@@ -324,7 +333,8 @@ int main(int argc, char **argv)
                     {
                         outputRedirect = true;
                     }
-                    else if(bytes == 0){ //blank newline at end of a bash script
+                    else if (bytes == 0)
+                    { // blank newline at end of a bash script
                         freeCommand(curr_command);
                         goto batch_exit;
                     }
@@ -334,13 +344,13 @@ int main(int argc, char **argv)
                 // handling redirections
                 if (inputRedirect)
                 {
-                    if((curr_command->fd_in = open(buf, O_RDONLY)) == -1)
+                    if ((curr_command->fd_in = open(buf, O_RDONLY)) == -1)
                         perror("open error");
                     inputRedirect = false;
                 }
                 else if (outputRedirect)
                 {
-                    if((curr_command->fd_out = open(buf, O_WRONLY | O_CREAT | O_TRUNC, 0640)) == -1)
+                    if ((curr_command->fd_out = open(buf, O_WRONLY | O_CREAT | O_TRUNC, 0640)) == -1)
                         perror("open error");
                     outputRedirect = false;
                 }
@@ -353,8 +363,10 @@ int main(int argc, char **argv)
                     {
                         glob_t glob_result;
                         glob(arg, 0, NULL, &glob_result);
-                        if (glob_result.gl_pathc == 0) { // No matching wildcard expansion
-                            if (strstr(arg, "\\*") != NULL) { // If the argument contained an escaped wildcard, remove the backslash
+                        if (glob_result.gl_pathc == 0)
+                        { // No matching wildcard expansion
+                            if (strstr(arg, "\\*") != NULL)
+                            { // If the argument contained an escaped wildcard, remove the backslash
                                 char *temp = malloc(strlen(arg));
                                 int j = 0;
                                 for (int i = 0; arg[i]; ++i)
@@ -365,9 +377,7 @@ int main(int argc, char **argv)
                                         i++; // skip the next character
                                     }
                                     else
-                                    {
                                         temp[j++] = arg[i];
-                                    }
                                 }
                                 temp[j] = '\0';
                                 free(arg);
@@ -427,7 +437,6 @@ int main(int argc, char **argv)
                     {
                         printf("Testing argument parsing %d: %s\n", i, curr_command->args[i]);
                     }*/
-                    
 
                     if (bytes == 0)
                     {
@@ -440,16 +449,25 @@ int main(int argc, char **argv)
 
                 memset(buf, 0, BUFSIZ);
                 pos = 0;
+                homeEnv = true;
             }
-            else if(c == '\\' && escapeChar == false){
-                escapeChar = true;
-            }
-            else if(c != '\n')
+            else if (c == '\\' && escapeChar == false)
             {
-                if(escapeChar == true && c == '*')
+                escapeChar = true;
+                homeEnv = false;
+            }
+            else if (c != '\n')
+            {
+                if (escapeChar == true && c == '*')
                     buf[pos++] = '\\';
                 buf[pos++] = c;
-                escapeChar = false; //If escape sequence was used
+                if(pos == 2 && buf[0] == '~' && buf[1] == '/' && homeEnv == true){ //Token beginning with ~/ and no escape sequence was used, set to home environment
+                    char *homePath = getenv("HOME");
+                    strcpy(buf, homePath);
+                    pos = strlen(homePath);
+                    buf[pos++] = '/';
+                }
+                escapeChar = false; // If escape sequence was used
             }
         }
 
