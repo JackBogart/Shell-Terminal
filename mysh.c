@@ -266,11 +266,6 @@ int execute_command(Command *cmd)
             return EXIT_FAILURE;
         }
 
-        if (cmd->fd_in != STDIN_FILENO) // closing input redirection
-            close(cmd->fd_in);
-        if (cmd->fd_out != STDOUT_FILENO) // closing output redirection
-            close(cmd->fd_out);
-
         return WEXITSTATUS(status);
     }
     return EXIT_FAILURE;
@@ -403,6 +398,10 @@ int main(int argc, char **argv)
                         {
                             write(STDOUT_FILENO, "!", 1);
                         }
+                        if (curr_command->fd_in != STDIN_FILENO) // closing input redirection
+                            close(curr_command->fd_in);
+                        if (curr_command->fd_out != STDOUT_FILENO) // closing output redirection
+                            close(curr_command->fd_out);
                     }
                     /* TESTING FOR PARSING
                     printf("Testing executable parsing: %s\n", curr_command->path);
