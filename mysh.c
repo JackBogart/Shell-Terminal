@@ -461,11 +461,10 @@ int main(int argc, char **argv)
                 if (escapeChar == true && c == '*')
                     buf[pos++] = '\\';
                 buf[pos++] = c;
-                if(pos == 2 && buf[0] == '~' && buf[1] == '/' && homeEnv == true){ //Token beginning with ~/ and no escape sequence was used, set to home environment
+                if(pos == 1 && buf[0] == '~' && homeEnv == true){ //Token beginning with ~ and no escape sequence was used, set to home environment
                     char *homePath = getenv("HOME");
                     strcpy(buf, homePath);
                     pos = strlen(homePath);
-                    buf[pos++] = '/';
                 }
                 escapeChar = false; // If escape sequence was used
             }
