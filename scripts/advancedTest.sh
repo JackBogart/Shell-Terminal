@@ -4,6 +4,7 @@ echo ====================
 cd redirect_tests
 echo foo>f1
 cat<f1>f2
+cat<p1|sort
 echo ====================
 echo REDIRECT/PIPE OF PWD
 echo ====================

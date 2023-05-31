@@ -16,16 +16,7 @@
 
 /*
 TO-DO:
-Refactor to get rid of dirty gotos
-Test path names (fixed?)
-Implement pipes <- Multiple additions require piping to implement/test. Must work on ASAP. Once this is complete the program is mostly done besides implementing the remaining extensions and testing
-EXTENSION CHECKLIST
-1. Escape sequences - Done (Needs further testing)
-2. Home directory - Done (Needs further testing)
-3. Directory wildcards - Done
-4. Multiple Pipes - Need to implement pipes, should be done with implementation
-5. Combining with && and || - Seems to work very similar to piping, will wait to complete piping
-Verify batch mode still works(should be the same but use fd instead of STDIN)
+Combining with && and || - This is a pain in the ass to implement because of "||". Distinguishing OR versus piping input, combined with correct tokenization of spaces is a bitch. Gonna do this on a rainy day if I ever come back to this.
 */
 
 typedef struct Command
@@ -105,13 +96,10 @@ char **add_to_args(Command *cmd, char **args, int *length, char *token)
         free(token); // freeing previous argument dupllicated by strdup
         return args;
     }
-    // Increase the length of the array
-    (*length)++;
 
-    // Reallocate the memory for the array
+    (*length)++;
     args = realloc(args, (*length) * sizeof(char *));
 
-    // Check if the reallocation was successful
     if (args == NULL)
     {
         perror("Failed to allocate memory\n");
@@ -159,7 +147,6 @@ int try_execute(char *path, Command *cmd)
 
 int non_built_in(Command *cmd)
 {
-
     // Check if the command path contains '/'
     if (strchr(cmd->path, '/') != NULL)
     {
@@ -274,8 +261,7 @@ int execute_command(Command *cmd)
     }
     else
     {
-        // Parent process
-        // Wait for child process to complete
+        // Parent process, waits for child processs to complete
         int status;
         if (waitpid(pid, &status, 0) == -1)
         {
@@ -290,11 +276,9 @@ int execute_command(Command *cmd)
 
 int main(int argc, char **argv)
 {
-
     install_handlers();
-
     if (argc == 1)
-        write(STDOUT_FILENO, "Welcome to my shell!\n", 21);
+        write(STDOUT_FILENO, "\e[1;92m""Welcome to my shell!\n", 28);
 
     // variables for buffer
     char c;
@@ -313,8 +297,20 @@ int main(int argc, char **argv)
     while (active)
     {
         if (argc <= 1)
-            write(STDOUT_FILENO, "mysh> ", 6);
+        {
+            char cwd[1024];
+            if (getcwd(cwd, sizeof(cwd)) != NULL)
+            {
+                char *home = getenv("HOME");
+                char *relative_path = strstr(cwd, home);
 
+                relative_path += strlen(home); // skip over the home part
+                write(STDOUT_FILENO, "\e[1;95m""mysh:",12);
+                write(STDOUT_FILENO, "\e[1;94m""~",8);
+                write(STDOUT_FILENO, relative_path, strlen(relative_path));
+                write(STDOUT_FILENO, "> ""\x1b[0m", 6);
+            }
+        }
         pos = 0;
         Command *curr_command = newCommand();
         commands[command_count++] = curr_command;
@@ -349,8 +345,7 @@ int main(int argc, char **argv)
                     else if (bytes == 0)
                     { // blank newline at end of a bash script
                         freeCommandList(commands, command_count);
-                        command_count = 0;
-                        goto batch_exit;
+                        goto shell_exit;
                     }
                     continue;
                 }
@@ -439,7 +434,6 @@ int main(int argc, char **argv)
                     if (strcmp(curr_command->path, "exit") == 0) // Check for user exiting shell
                     {
                         freeCommandList(commands, command_count);
-                        command_count = 0;
                         goto shell_exit;
                     }
                     else // executing command
@@ -448,8 +442,8 @@ int main(int argc, char **argv)
                         {
                             if (execute_command(commands[i]) == EXIT_FAILURE)
                             {
-                                if(argc <= 1)
-                                    write(STDOUT_FILENO, "!", 1);
+                                if (argc <= 1)
+                                    write(STDOUT_FILENO, "\e[1;91m" "!", 8);
                                 break;
                             }
                             if (commands[i]->fd_in != STDIN_FILENO) // closing input redirection
@@ -458,18 +452,11 @@ int main(int argc, char **argv)
                                 close(commands[i]->fd_out);
                         }
                     }
-                    /* TESTING FOR PARSING
-                    printf("Testing executable parsing: %s\n", curr_command->path);
-                    for (int i = 0; i < curr_command->arg_length; i++)
-                    {
-                        printf("Testing argument parsing %d: %s\n", i, curr_command->args[i]);
-                    }*/
 
                     if (bytes == 0)
                     {
                         freeCommandList(commands, command_count);
-                        command_count = 0;
-                        goto batch_exit;
+                        goto shell_exit;
                     }
 
                     break;
@@ -508,14 +495,10 @@ int main(int argc, char **argv)
             goto shell_exit;
         }
     }
-
-    if (0)
-    { // This is accessed only by the user typing "exit" or sending SIGINT
-    shell_exit:
-        write(STDOUT_FILENO, "mysh: exiting\n", 15);
-    }
-    batch_exit:
-    // Free remaining resources here (if any)
+    
+shell_exit:
+    if (argc <= 1)
+        write(STDOUT_FILENO, "\e[1;91m" "mysh: exiting\n", 21);
 
     return EXIT_SUCCESS;
 }
