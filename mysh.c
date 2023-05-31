@@ -16,7 +16,8 @@
 
 /*
 TO-DO:
-Combining with && and || - This is a pain in the ass to implement because of "||". Distinguishing OR versus piping input, combined with correct tokenization of spaces is a bitch. Gonna do this on a rainy day if I ever come back to this.
+Combining with && and || - This is a pain in the ass to implement because of "||". Distinguishing OR versus piping input, combined with correct tokenization of spaces is a bitch. Gonna do this on a rainy day if I ever come back to this. Look into the parsing in main().
+Look into pipes running in parallel. No big difference in functionality, but that is how they are supposed to work. I would need to fork for each pipe so a process can run while I am parsing the next command. Would need to look at main() and execute().
 */
 
 typedef struct Command

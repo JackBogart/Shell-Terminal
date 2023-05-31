@@ -1,20 +1,41 @@
-John Bogart - jgb128
+John Bogart
+Rutgers University
 
 This is a redone version of Project 2 - Shell Terminal, for Systems Programming (CS 214).
-I redid this assignment because I was unhappy with my work. I felt restrained in some ways by the time crunch my partner put upon me, therefore I did this version completely alone.
-Almost 0 code is reused from the first iteration as I wanted to ensure that I learned the key concepts that this project taught.
+I redid this assignment because I was unsatisified with my work, and I wanted to ensure I fully understood the concepts.
+I started from scratch and completely reevaluted how to approach each part of this project on my own this time.
 
-Extensions:
-All
+Features:
+    Batch Mode - Run mysh with a bash script to automate commands.
+    Interactive Mode - Run mysh without arguments to enter each command line one at a time.
 
-Testing Plan: (located under scripts/)
-    batchin1.sh - This creates a subdirectory and calls echo to redirect the input to a new file in that subdirectory.
-        cat then reads the contents of the file before the entire directory is removed recursively.
+    Commands - Execute a linux command such as cd, pwd, ps, etc.
+    Wildcards - Tokens containing '*' represent a wildcard of 0 or more characters. Any file matching the pattern will be added to the list of arguments.
+    Redirection - Using '<' and '>', clients may redirect input and output to their own files, or create new files with output if they do not exist.
+    Pipes - Using '|', clients may have out program's output be used as input for another command running in parallel.
+
+Extra Features:
+    Escape Sequences - Clients can have special characters such as '*', '<', '>', '|', etc, be recognized as a regular character rather than it's original purpose. By adding the escape
+        character '\' before each respective character, the terminal will treat the special characters as normal.
     
-    batchin2.sh - This is the same as batchin1.sh, however it doesn't write to a file as file redirection is not implemented yet. This is for testing purposes only and will be redone.
+    Home Directory - Calling "cd" without any arguments will bring the client to their home directory. Clients may also refer to files relative to the home directory with "~/".
 
-    wildcardTest.sh - Runs tests to ensure wildcards work along with wildcard directories.
+    Directory Wildcards - Wildcards can also be directory names. This allows clients to quickly traverse directories rather than typing the full name with commands such as "cd fo*/b*r"
 
-    redirectTest.sh - Runs tests to ensure basic file redirection works
+    Multiple Pipes - Multiple commands can be linked together using pipes, allowing clients to chain as many sub-commands together as they'd like.
 
-    advancedTest.sh - Runs tests of advanced features such as no space between redirection to ensure tokenization, or redirecting pwd
+    Combining with && and || - Check back later!
+
+Testing: (located under scripts/)
+    *batchin1.sh - This creates a subdirectory and calls echo to redirect the input to a new file in that subdirectory.
+        Cat then reads the contents of the file before the entire directory is removed recursively.
+
+    *wildcardTest.sh - Runs tests to ensure wildcards work along with wildcard directories.
+
+    *redirectTest.sh - Runs tests to ensure basic file redirection works
+
+    *pipeTest.sh - Runs tests to ensure pipes are working correctly.
+
+    *advancedTest.sh - Runs tests of advanced features such as no space between redirection to ensure tokenization, or redirecting pwd
+
+    *miscTest.sh - Runs tests for escape sequence, home directory, and directory wildcards
