@@ -15,8 +15,8 @@ Features:
     Pipes - Using '|', clients may have out program's output be used as input for another command running in parallel.
 
 Extra Features:
-    Escape Sequences - Clients can have special characters such as '*', '<', '>', '|', etc, be recognized as a regular character rather than it's original purpose. By adding the escape
-        character '\' before each respective character, the terminal will treat the special characters as normal.
+    Escape Sequences - Clients can have special characters such as '*', '<', '>', '|', etc, be recognized as a regular character rather than it's original purpose. 
+    By adding the escape character '\' before each respective character, the terminal will treat the special characters as normal.
     
     Home Directory - Calling "cd" without any arguments will bring the client to their home directory. Clients may also refer to files relative to the home directory with "~/".
 
